@@ -586,16 +586,16 @@ function initPeer() {
     toast('Your Game ID is ready', 'ok');
   });
 
-  // Incoming connection (host side)
+  // Incoming connection (host side) — wait for HANDSHAKE before starting
   peer.on('connection', c => {
     if (conn && conn.open) { c.close(); return; }
     conn = c;
     isHost = true;
     setupConn();
     setStatus('hostStatus', '● Opponent connected — starting…', 'ok');
-    connLog('hostDebug', 'Incoming connection from peer');
+    connLog('hostDebug', 'Incoming connection — waiting for HANDSHAKE');
     toast('Opponent connected!', 'ok');
-    setTimeout(startGame, 800);
+    // startGame() fires when HANDSHAKE arrives in handleMessage
   });
 
   peer.on('error', e => {
@@ -663,7 +663,7 @@ function initPeerFallback() {
     conn = c; isHost = true; setupConn();
     setStatus('hostStatus', '● Opponent connected — starting…', 'ok');
     toast('Opponent connected!', 'ok');
-    setTimeout(startGame, 800);
+    // startGame() fires when HANDSHAKE arrives
   });
 
   peer.on('error', e => {
@@ -805,9 +805,12 @@ function makeState(myM, oppM, sk) {
 
 // ── MESSAGE HANDLER ───────────────────────────────────────────────────────────
 function handleMessage(msg) {
-  // Joiner sends this on channel open; host ignores (already handled by peer.on('connection'))
+  // Joiner sends HANDSHAKE on channel open — host uses this as the start signal
   if (msg.type === 'HANDSHAKE') {
-    connLog('hostDebug', 'Handshake received from joiner');
+    connLog('hostDebug', 'HANDSHAKE received — starting game');
+    if (isHost) {
+      startGame();
+    }
     return;
   }
 
