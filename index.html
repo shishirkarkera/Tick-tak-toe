@@ -1,26 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SKITTLE BID — Bidding Tic-Tac-Toe</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #05080f;
+    --bg2:     #090d18;
+    --panel:   #0c1120;
+    --panel2:  #0f1628;
+    --border:  #1a2540;
+    --border2: #243050;
+    --red:     #d62b2b;
+    --red2:    #ff3a3a;
+    --blue:    #1e6fff;
+    --blue2:   #4d90ff;
+    --cyan:    #00c2e0;
+    --white:   #f0f4ff;
+    --muted:   #5a6a8a;
+    --muted2:  #7a8aaa;
+    --gold:    #c9a84c;
+    --green:   #1db87a;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    font-family: 'Barlow', sans-serif;
+    color: var(--white);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+    opacity: 0.025; pointer-events: none; z-index: 9999;
+  }
+  .atmo { position: fixed; pointer-events: none; z-index: 0; border-radius: 50%; filter: blur(130px); }
+  .atmo-1 { width:650px;height:650px; background:radial-gradient(circle,#081d5e 0%,transparent 70%); top:-220px;left:-180px;opacity:0.55; animation:dA 22s ease-in-out infinite alternate; }
+  .atmo-2 { width:500px;height:500px; background:radial-gradient(circle,#5e0808 0%,transparent 70%); bottom:-120px;right:-100px;opacity:0.3; animation:dB 28s ease-in-out infinite alternate; }
+  .atmo-3 { width:320px;height:320px; background:radial-gradient(circle,#041230 0%,transparent 70%); top:45%;left:55%;opacity:0.4; animation:dA 19s ease-in-out infinite alternate-reverse; }
+  @keyframes dA { from{transform:translate(0,0)} to{transform:translate(45px,30px)} }
+  @keyframes dB { from{transform:translate(0,0)} to{transform:translate(-30px,-45px)} }
+  .scanlines {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px);
+  }
+  .site-wrap {
+    position: relative; z-index: 2;
+    max-width: 960px; margin: 0 auto;
+    padding: 0 24px 60px;
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+  }
+
+  /* HEADER */
+  .site-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 28px 0 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .logo {
+    font-family: 'Bebas Neue', cursive;
+    font-size: 1.4rem; letter-spacing: 5px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo-dot { width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red2); flex-shrink:0; }
+  .header-tag { font-size:0.6rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;font-weight:500; }
+
+  /* HERO */
+  .hero {
+    display: grid; grid-template-columns: 1fr auto;
+    align-items: end; gap: 20px;
+    margin-bottom: 36px; padding-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  .hero-left h1 {
+    font-family: 'Bebas Neue', cursive;
+    font-size: clamp(3.5rem,11vw,7.5rem);
+    line-height: 0.88; letter-spacing: 2px; color: var(--white);
+  }
+  .hero-left h1 .acc { color: var(--red); }
+  .hero-left .sub {
+    font-family: 'DM Serif Display', serif; font-style: italic;
+    font-size: clamp(0.9rem,2vw,1.25rem);
+    color: var(--muted2); margin-top: 10px;
+  }
+  .hero-right { text-align:right; }
+  .hero-right .yr { font-family:'Bebas Neue',cursive;font-size:2.8rem;color:var(--border2);line-height:1; }
+  .hero-right .pill {
+    display:inline-block;border:1px solid var(--border2);
+    padding:3px 12px;font-size:0.6rem;letter-spacing:3px;
+    color:var(--muted);text-transform:uppercase;margin-top:6px;
+  }
+
+  /* SCREENS */
+  .screen { display:none;flex-direction:column;gap:18px; }
+  .screen.active { display:flex; }
+
+  /* SECTION LABEL */
+  .sec-label {
+    font-size:0.58rem;letter-spacing:4px;color:var(--muted);
+    text-transform:uppercase;font-weight:600;
+    display:flex;align-items:center;gap:10px;margin-bottom:14px;
+  }
+  .sec-label::after { content:'';flex:1;height:1px;background:var(--border); }
+
+  /* LOBBY */
+  .lobby-grid { display:grid;grid-template-columns:1fr 1fr;gap:14px; }
+  @media(max-width:560px){.lobby-grid{grid-template-columns:1fr;}}
+
+  .card {
+    background:var(--panel);border:1px solid var(--border);
+    padding:26px;position:relative;overflow:hidden;
+  }
+  .card::before {
+    content:'';position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--blue),transparent);opacity:0.5;
+  }
+  .card.red-top::before { background:linear-gradient(90deg,transparent,var(--red),transparent); }
+  .card h2 { font-family:'Bebas Neue',cursive;font-size:1.7rem;letter-spacing:3px;color:var(--white);margin-bottom:4px; }
+  .card p  { font-size:0.78rem;color:var(--muted2);margin-bottom:18px;line-height:1.55; }
+
+  /* INPUTS */
+  .input-row { display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px; }
+  input[type="text"],input[type="number"] {
+    background:var(--bg2);border:1px solid var(--border2);
+    color:var(--white);font-family:'DM Mono',monospace;
+    font-size:0.82rem;padding:9px 13px;outline:none;
+    transition:border-color 0.2s;flex:1;min-width:130px;letter-spacing:1px;
+  }
+  input:focus { border-color:var(--blue2); }
+  input[type="number"] { max-width:80px;text-align:center; }
+
+  /* BUTTONS */
+  .btn {
+    font-family:'Bebas Neue',cursive;font-size:0.95rem;
+    letter-spacing:3px;padding:10px 24px;
+    border:none;cursor:pointer;transition:all 0.16s;
+    position:relative;overflow:hidden;white-space:nowrap;
+  }
+  .btn::after { content:'';position:absolute;inset:0;background:rgba(255,255,255,0);transition:background 0.16s; }
+  .btn:hover::after { background:rgba(255,255,255,0.07); }
+  .btn:active { transform:scale(0.97); }
+  .btn:disabled { opacity:0.35;cursor:not-allowed; }
+  .btn-blue  { background:var(--blue);color:#fff;box-shadow:0 4px 22px rgba(30,111,255,0.35); }
+  .btn-red   { background:var(--red);color:#fff;box-shadow:0 4px 22px rgba(214,43,43,0.35); }
+  .btn-green { background:var(--green);color:#fff;box-shadow:0 4px 22px rgba(29,184,122,0.35); }
+  .btn-ghost { background:transparent;color:var(--muted2);border:1px solid var(--border2);letter-spacing:2px;font-size:0.78rem; }
+  .btn-ghost:hover { color:var(--white);border-color:var(--muted); }
+
+  /* PEER ID */
+  .peer-id-box {
+    background:var(--bg2);border:1px dashed var(--border2);
+    padding:9px 13px;display:flex;align-items:center;gap:10px;margin-bottom:12px;
+  }
+  .id-val { font-family:'DM Mono',monospace;font-size:0.75rem;color:var(--cyan);flex:1;word-break:break-all;letter-spacing:1px; }
+  .copy-btn {
+    background:var(--border2);border:none;color:var(--muted2);
+    font-family:'Barlow',sans-serif;font-size:0.68rem;font-weight:600;
+    letter-spacing:2px;text-transform:uppercase;padding:5px 11px;
+    cursor:pointer;transition:background 0.15s,color 0.15s;white-space:nowrap;
+  }
+  .copy-btn:hover { background:var(--blue);color:#fff; }
+
+  /* STATUS */
+  .status { font-size:0.68rem;color:var(--muted);letter-spacing:1px;min-height:16px;font-weight:500;text-transform:uppercase; }
+  .status.ok   { color:var(--green); }
+  .status.err  { color:var(--red2); }
+  .status.warn { color:var(--gold); }
+
+  /* NOTICE */
+  .notice-bar { background:var(--panel);border-left:2px solid var(--blue);padding:12px 18px;font-size:0.76rem;color:var(--muted2);line-height:1.6; }
+  .notice-bar strong { color:var(--white); }
+
+  /* CONNECTING */
+  .connecting { text-align:center;padding:50px 20px; }
+  .connecting .spinner { width:34px;height:34px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px; }
+  .connecting p { font-size:0.7rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* GAME */
+  .game-layout { display:grid;grid-template-columns:1fr 240px;gap:14px;align-items:start; }
+  @media(max-width:620px){.game-layout{grid-template-columns:1fr;}}
+
+  .game-card {
+    background:var(--panel);border:1px solid var(--border);
+    padding:20px;position:relative;
+  }
+  .game-card::before {
+    content:'';position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,var(--blue) 0%,transparent 60%);
+  }
+
+  /* TOP BAR */
+  .game-topbar { display:flex;align-items:center;justify-content:space-between;margin-bottom:14px; }
+  .phase-badge { font-family:'Bebas Neue',cursive;font-size:0.82rem;letter-spacing:3px;padding:4px 12px;border:1px solid; }
+  .phase-select { border-color:var(--blue);color:var(--blue2); }
+  .phase-bid    { border-color:var(--gold);color:var(--gold); }
+  .phase-reveal { border-color:var(--green);color:var(--green); }
+  .phase-done   { border-color:var(--red);color:var(--red2); }
+  .round-num { font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--muted);letter-spacing:2px; }
+
+  /* BOARD */
+  .board { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-width:310px;margin:0 auto 14px; }
+  .cell {
+    aspect-ratio:1;background:var(--bg2);border:1px solid var(--border2);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    cursor:pointer;position:relative;overflow:hidden;
+    transition:border-color 0.16s,background 0.16s;min-height:76px;gap:3px;
+  }
+  .cell::after { content:'';position:absolute;inset:0;background:rgba(255,255,255,0);transition:background 0.14s; }
+  .cell:hover:not(.taken):not(.voided):not(.disabled)::after { background:rgba(30,111,255,0.07); }
+  .cell:hover:not(.taken):not(.voided):not(.disabled) { border-color:var(--blue2); }
+  .cell.selected { border-color:var(--gold);background:rgba(201,168,76,0.07);box-shadow:inset 0 0 20px rgba(201,168,76,0.08); }
+  .cell.taken { cursor:default; }
+  .cell.taken-x { border-color:var(--red);background:rgba(214,43,43,0.09); }
+  .cell.taken-o { border-color:var(--blue);background:rgba(30,111,255,0.09); }
+  .cell.voided  { cursor:default;background:rgba(0,0,0,0.5);border-color:var(--border);opacity:0.42; }
+  .cell.disabled { cursor:not-allowed; }
+  .cell.win-cell { animation:winP 0.7s ease-in-out infinite alternate; }
+  @keyframes winP { from{box-shadow:inset 0 0 10px rgba(201,168,76,0.1)} to{box-shadow:inset 0 0 28px rgba(201,168,76,0.4),0 0 18px rgba(201,168,76,0.25)} }
+  .cell-marker { font-family:'Bebas Neue',cursive;font-size:2rem;line-height:1;letter-spacing:2px; }
+  .cell-marker.x { color:var(--red2);text-shadow:0 0 12px rgba(255,58,58,0.5); }
+  .cell-marker.o { color:var(--blue2);text-shadow:0 0 12px rgba(77,144,255,0.5); }
+  .cell-num { font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--border2);letter-spacing:1px; }
+  .cell-void-txt { font-family:'Bebas Neue',cursive;font-size:0.72rem;letter-spacing:2px;color:var(--muted); }
+
+  /* SIDEBAR */
+  .sidebar { display:flex;flex-direction:column;gap:10px; }
+  .player-panel { background:var(--panel2);border:1px solid var(--border);padding:13px 15px;position:relative; }
+  .player-panel.me  { border-left:2px solid var(--red); }
+  .player-panel.opp { border-left:2px solid var(--blue); }
+  .player-panel h3  { font-family:'Bebas Neue',cursive;font-size:0.95rem;letter-spacing:3px;color:var(--muted2);margin-bottom:5px; }
+  .sk-count { font-family:'Bebas Neue',cursive;font-size:2.6rem;line-height:1;color:var(--white); }
+  .sk-label { font-size:0.6rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase;font-weight:600;margin-top:1px; }
+  .skittle-dots { display:flex;flex-wrap:wrap;gap:4px;margin-top:7px; }
+  .sdot { width:9px;height:9px;border-radius:50%;transition:opacity 0.3s; }
+  .sdot.spent { opacity:0.1; }
+
+  /* TURN BAR */
+  .turn-bar {
+    background:var(--bg2);border:1px solid var(--border);
+    padding:9px 13px;font-family:'Barlow',sans-serif;
+    font-size:0.68rem;letter-spacing:2px;font-weight:600;
+    text-transform:uppercase;text-align:center;
+  }
+  .turn-bar.mine   { color:var(--gold);border-color:rgba(201,168,76,0.25); }
+  .turn-bar.theirs { color:var(--muted); }
+
+  /* BID PANEL */
+  .bid-panel { background:var(--panel2);border:1px solid var(--border2);padding:15px; }
+  .bid-panel h3 { font-family:'Bebas Neue',cursive;font-size:1.05rem;letter-spacing:3px;color:var(--gold);margin-bottom:3px; }
+  .bid-for { font-size:0.62rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px; }
+  .bid-for span { color:var(--white);font-weight:600; }
+  .bid-num { font-family:'Bebas Neue',cursive;font-size:4.2rem;line-height:1;color:var(--white);text-align:center;letter-spacing:2px;margin-bottom:5px; }
+  .bid-num .sk-unit { font-size:1rem;color:var(--muted);vertical-align:middle;letter-spacing:1px; }
+  input[type="range"] { width:100%;accent-color:var(--red);height:4px;cursor:pointer;margin-bottom:3px; }
+  .range-labels { display:flex;justify-content:space-between;font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--muted);margin-bottom:12px; }
+  .bid-actions { display:flex;gap:8px; }
+  .bid-actions .btn { flex:1;font-size:0.88rem;padding:9px 0; }
+
+  /* WAIT */
+  .wait-msg { text-align:center;padding:11px;font-size:0.68rem;letter-spacing:2px;text-transform:uppercase;color:var(--muted); }
+  .blink { animation:blnk 1.4s ease infinite; }
+  @keyframes blnk { 0%,100%{opacity:1}50%{opacity:0.18} }
+
+  /* REVEAL */
+  .reveal-block { background:var(--bg2);border:1px solid var(--border2);padding:15px;margin-top:11px; }
+  .reveal-label { font-size:0.58rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-bottom:11px;font-weight:600; }
+  .reveal-row { display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:9px; }
+  .reveal-box { flex:1;background:var(--panel);border:1px solid var(--border2);padding:11px 8px;text-align:center; }
+  .r-label { font-size:0.56rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-bottom:3px;font-weight:600; }
+  .r-amount { font-family:'Bebas Neue',cursive;font-size:2.2rem;line-height:1;color:var(--white); }
+  .reveal-box.winner { border-color:var(--green); }
+  .reveal-box.winner .r-amount { color:var(--green); }
+  .reveal-box.loser  { border-color:var(--red);opacity:0.7; }
+  .reveal-box.loser  .r-amount { color:var(--red2); }
+  .reveal-box.tied   { border-color:var(--gold); }
+  .reveal-box.tied   .r-amount { color:var(--gold); }
+  .reveal-vs { font-family:'Bebas Neue',cursive;font-size:1.1rem;letter-spacing:2px;color:var(--muted); }
+  .reveal-outcome { font-size:0.68rem;letter-spacing:2px;color:var(--muted2);text-transform:uppercase;text-align:center;font-weight:600; }
+
+  /* LOG */
+  .log-title { font-size:0.56rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;font-weight:600;margin-bottom:5px; }
+  .log-scroll {
+    background:var(--bg2);border:1px solid var(--border);
+    padding:9px 12px;max-height:155px;overflow-y:auto;
+    font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--muted);
+    scrollbar-width:thin;scrollbar-color:var(--border2) transparent;
+  }
+  .log-entry { padding:3px 0;border-bottom:1px solid var(--border);line-height:1.5; }
+  .log-entry:last-child { border-bottom:none; }
+  .lw { color:var(--green); }
+  .lv { color:var(--muted); }
+  .ll { color:var(--red2); }
+  .lh { color:var(--white); }
+
+  /* RESULT OVERLAY */
+  .result-overlay { position:fixed;inset:0;z-index:200;background:rgba(3,5,12,0.95);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px); }
+  .result-overlay.hidden { display:none; }
+  .result-modal {
+    background:var(--panel);border:1px solid var(--border2);
+    padding:48px 56px;text-align:center;max-width:420px;width:90%;
+    position:relative;animation:mIn 0.4s cubic-bezier(0.22,1,0.36,1);
+  }
+  .result-modal::before { content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--blue)); }
+  @keyframes mIn { from{transform:translateY(28px) scale(0.94);opacity:0} to{transform:translateY(0) scale(1);opacity:1} }
+  .r-icon { font-size:3.2rem;margin-bottom:10px; }
+  .result-modal h2 { font-family:'Bebas Neue',cursive;font-size:3.2rem;letter-spacing:4px;color:var(--white);line-height:1;margin-bottom:6px; }
+  .result-modal p  { font-size:0.8rem;color:var(--muted2);margin-bottom:26px;line-height:1.6; }
+  .result-btns { display:flex;gap:10px;justify-content:center; }
+</style>
+</head>
+<body>
+
+<div class="atmo atmo-1"></div>
+<div class="atmo atmo-2"></div>
+<div class="atmo atmo-3"></div>
+<div class="scanlines"></div>
+
+<div class="site-wrap">
+
+  <header class="site-header">
+    <div class="logo">
+      <div class="logo-dot"></div>
+      SKITTLE BID
+    </div>
+    <div class="header-tag">P2P · Bidding Tic-Tac-Toe</div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-left">
+      <h1>BID.<br><span class="acc">WIN.</span></h1>
+      <div class="sub">Outwit your opponent — one secret bet at a time.</div>
+    </div>
+    <div class="hero-right">
+      <div class="yr">2026</div>
+      <div class="pill">Strategy Game</div>
+    </div>
+  </div>
+
+  <!-- LOBBY -->
+  <div id="screen-lobby" class="screen active">
+    <div id="conn-loading" class="connecting">
+      <div class="spinner"></div>
+      <p>Initialising network…</p>
+    </div>
+
+    <div id="lobby-inner" style="display:none;flex-direction:column;gap:18px;">
+
+      <div class="sec-label">Connection</div>
+
+      <div class="lobby-grid">
+        <div class="card">
+          <h2>Host Game</h2>
+          <p>Share your Game ID with a friend to start a match.</p>
+          <div class="peer-id-box">
+            <span class="id-val" id="myIdText">—</span>
+            <button class="copy-btn" onclick="copyId()">Copy</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+            <span style="font-size:0.68rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;">Skittles</span>
+            <input type="number" id="hostSkittles" value="15" min="5" max="50">
+            <span style="font-size:0.68rem;color:var(--muted);">each</span>
+          </div>
+          <div class="status" id="hostStatus">Awaiting connection…</div>
+        </div>
+
+        <div class="card red-top">
+          <h2>Join Game</h2>
+          <p>Enter your opponent's Game ID to connect and play.</p>
+          <div class="input-row">
+            <input type="text" id="joinIdInput" placeholder="Paste Game ID…">
+          </div>
+          <div style="margin-bottom:12px;">
+            <button class="btn btn-red" onclick="joinGame()">Connect →</button>
+          </div>
+          <div class="status" id="joinStatus">Ready to connect.</div>
+        </div>
+      </div>
+
+      <div class="notice-bar">
+        <strong>How to play:</strong> Select a square, secretly bid Skittles, then reveal simultaneously. Highest bid claims the square. A tie voids the square forever. First to three-in-a-row wins — but manage your supply wisely.
+      </div>
+    </div>
+  </div>
+
+  <!-- GAME -->
+  <div id="screen-game" class="screen">
+    <div class="game-layout">
+
+      <div class="game-card">
+        <div class="game-topbar">
+          <span class="phase-badge phase-select" id="phaseBadge">SELECT SQUARE</span>
+          <span class="round-num" id="roundCounter">RND 01</span>
+        </div>
+
+        <div class="board" id="board"></div>
+        <div id="revealArea" style="display:none;"></div>
+
+        <div style="margin-top:13px;">
+          <div class="log-title">Match Log</div>
+          <div class="log-scroll" id="gameLog"></div>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="player-panel me">
+          <h3>You <span id="myMarkerLabel" style="color:var(--red);"></span></h3>
+          <div class="sk-count" id="mySkittles">15</div>
+          <div class="sk-label">Skittles Remaining</div>
+          <div class="skittle-dots" id="mySkittleRow"></div>
+        </div>
+
+        <div class="player-panel opp">
+          <h3>Opponent <span id="oppMarkerLabel" style="color:var(--blue2);"></span></h3>
+          <div class="sk-count" id="oppSkittles">15</div>
+          <div class="sk-label">Skittles Remaining</div>
+          <div class="skittle-dots" id="oppSkittleRow"></div>
+        </div>
+
+        <div class="turn-bar mine" id="turnIndicator">Select a square</div>
+
+        <div class="bid-panel" id="bidArea" style="display:none;">
+          <h3>Secret Bid</h3>
+          <div class="bid-for">Fighting for square <span id="bidSquareLabel">#?</span></div>
+          <div class="bid-num"><span id="bidValueDisplay">1</span><span class="sk-unit"> SK</span></div>
+          <input type="range" id="bidSlider" min="0" max="15" value="1" oninput="updateBidDisplay()">
+          <div class="range-labels"><span>0</span><span id="sliderMax">15</span></div>
+          <div class="bid-actions">
+            <button class="btn btn-red" onclick="confirmBid()">Lock In</button>
+            <button class="btn btn-ghost" onclick="cancelBid()">Cancel</button>
+          </div>
+        </div>
+
+        <div id="waitingBidMsg" style="display:none;">
+          <div class="wait-msg"><span class="blink">◆</span> Awaiting opponent…</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- RESULT OVERLAY -->
+<div class="result-overlay hidden" id="resultOverlay">
+  <div class="result-modal">
+    <div class="r-icon" id="resultEmoji">🏆</div>
+    <h2 id="resultTitle">You Win</h2>
+    <p id="resultDesc">You outbid your opponent with precision.</p>
+    <div class="result-btns">
+      <button class="btn btn-green" onclick="rematch()">Rematch</button>
+      <button class="btn btn-ghost" onclick="backToLobby()">Menu</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const PALETTE = ['#d62b2b','#1e6fff','#c9a84c','#1db87a','#e05500','#9b2dca'];
 let peer, conn, isHost = false, myId = null, gameState = null;
 
-// New state variables to handle connection hanging
-let isConnecting = false;
-let joinTimeout = null;
-
 function initPeer() {
   document.getElementById('conn-loading').style.display = 'block';
   document.getElementById('lobby-inner').style.display = 'none';
-  
-  // FIX 1: Added explicit Google STUN servers for robust NAT traversal
-  peer = new Peer(undefined, { 
-    debug: 0,
-    config: {
-      'iceServers': [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    }
-  });
-
+  peer = new Peer(undefined, { debug: 0 });
   peer.on('open', id => {
     myId = id;
     document.getElementById('myIdText').textContent = id;
@@ -28,53 +476,21 @@ function initPeer() {
     document.getElementById('lobby-inner').style.display = 'flex';
     setStatus('hostStatus','● Ready — share your ID','ok');
   });
-
   peer.on('connection', c => {
     conn = c; isHost = true; setupConn();
     setStatus('hostStatus','● Opponent connected — starting…','ok');
     setTimeout(startGame, 500);
   });
-
-  peer.on('error', e => {
-    isConnecting = false;
-    setStatus('joinStatus','✕ ' + e.message,'err');
-  });
+  peer.on('error', e => setStatus('joinStatus','✕ ' + e.message,'err'));
 }
 
 function joinGame() {
-  if (isConnecting) return; // Prevent spam clicking
-  
   const id = document.getElementById('joinIdInput').value.trim();
   if (!id) return;
-  
-  isConnecting = true;
   setStatus('joinStatus','◌ Connecting…','warn');
-  
-  // FIX 2: Added reliable flag for game data
-  conn = peer.connect(id, { reliable: true });
-
-  // FIX 3: Connection timeout fallback if WebRTC hangs
-  clearTimeout(joinTimeout);
-  joinTimeout = setTimeout(() => {
-    if (isConnecting) {
-      isConnecting = false;
-      setStatus('joinStatus','✕ Connection timed out. Check ID.','err');
-      if (conn) conn.close();
-    }
-  }, 8000);
-
-  conn.on('open', () => {
-    clearTimeout(joinTimeout);
-    isConnecting = false;
-    setupConn(); 
-    setStatus('joinStatus','● Connected — waiting for host','ok'); 
-  });
-  
-  conn.on('error', e => {
-    clearTimeout(joinTimeout);
-    isConnecting = false;
-    setStatus('joinStatus','✕ ' + e.message,'err');
-  });
+  conn = peer.connect(id);
+  conn.on('open', () => { setupConn(); setStatus('joinStatus','● Connected — waiting for host','ok'); });
+  conn.on('error', e => setStatus('joinStatus','✕ ' + e.message,'err'));
 }
 
 function setupConn() {
@@ -87,25 +503,12 @@ function setupConn() {
 
 function send(msg) { if (conn && conn.open) conn.send(msg); }
 
-// FIX 4: Added local/HTTP fallback for clipboard copying
 function copyId() {
-  const triggerVisual = () => {
+  navigator.clipboard.writeText(myId).then(() => {
     const b = document.querySelector('.copy-btn');
     b.textContent = 'Copied!';
     setTimeout(() => b.textContent = 'Copy', 1600);
-  };
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(myId).then(triggerVisual);
-  } else {
-    const temp = document.createElement('textarea');
-    temp.value = myId;
-    document.body.appendChild(temp);
-    temp.select();
-    document.execCommand('copy');
-    document.body.removeChild(temp);
-    triggerVisual();
-  }
+  });
 }
 
 function setStatus(id, msg, cls='') {
@@ -288,7 +691,6 @@ function doReveal() {
   </div>`;
   document.getElementById('roundCounter').textContent=`RND ${String(gameState.currentRound).padStart(2,'0')}`;
   gameState.currentRound++; renderSkittles();
-  
   setTimeout(() => {
     const result=checkWin();
     if (result) {
@@ -347,5 +749,6 @@ function log(msg) {
 }
 
 initPeer();
-      </script>
-      
+</script>
+</body>
+</html>
