@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SKITTLE BID — Bidding Tic-Tac-Toe</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -509,22 +509,74 @@ function connLog(panelId, msg) {
   el.scrollTop = el.scrollHeight;
 }
 
+// ── ICE / STUN / TURN CONFIG ──────────────────────────────────────────────────
+// Multiple public STUN servers + open TURN relay for NAT traversal across
+// different networks (mobile data ↔ WiFi, different ISPs, etc.)
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+  // Open TURN relay — handles strict NAT/firewalls where STUN alone fails
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
+
+let peerInitRetries = 0;
+const MAX_PEER_RETRIES = 3;
+
 // ── PEER INIT ────────────────────────────────────────────────────────────────
 function initPeer() {
   document.getElementById('conn-loading').style.display = 'block';
   document.getElementById('lobby-inner').style.display = 'none';
 
+  // Destroy any previous peer cleanly
+  if (peer && !peer.destroyed) {
+    try { peer.destroy(); } catch(e) {}
+  }
+
+  // Use peerjs.com public broker (more reliable than 0.peerjs.com default)
   peer = new Peer(undefined, {
-    debug: 0,
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    }
+    host: '0.peerjs.com',
+    port: 443,
+    path: '/',
+    secure: true,
+    debug: 1,
+    config: { iceServers: ICE_SERVERS }
   });
 
+  const initTimeout = setTimeout(() => {
+    if (!myId) {
+      connLog('hostDebug', 'Init timed out — retrying with fallback server…');
+      peerInitRetries++;
+      if (peerInitRetries <= MAX_PEER_RETRIES) {
+        initPeerFallback();
+      } else {
+        document.getElementById('conn-loading').innerHTML =
+          '<p style="color:var(--red2);font-size:0.75rem;letter-spacing:2px;">NETWORK ERROR — refresh the page</p>';
+      }
+    }
+  }, 8000);
+
   peer.on('open', id => {
+    clearTimeout(initTimeout);
+    peerInitRetries = 0;
     myId = id;
     document.getElementById('myIdText').textContent = id;
     document.getElementById('conn-loading').style.display = 'none';
@@ -536,24 +588,97 @@ function initPeer() {
 
   // Incoming connection (host side)
   peer.on('connection', c => {
-    if (conn && conn.open) { c.close(); return; } // already have a connection
+    if (conn && conn.open) { c.close(); return; }
     conn = c;
     isHost = true;
     setupConn();
     setStatus('hostStatus', '● Opponent connected — starting…', 'ok');
     connLog('hostDebug', 'Incoming connection from peer');
     toast('Opponent connected!', 'ok');
-    setTimeout(startGame, 600);
+    setTimeout(startGame, 800);
   });
 
   peer.on('error', e => {
-    connLog('hostDebug', 'ERROR: ' + e.type);
-    toast('Network error: ' + e.type, 'err');
+    connLog('hostDebug', 'ERROR: ' + e.type + (e.message ? ' — ' + e.message : ''));
+    if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error') {
+      if (!myId && peerInitRetries < MAX_PEER_RETRIES) {
+        peerInitRetries++;
+        connLog('hostDebug', 'Retrying with fallback (' + peerInitRetries + ')…');
+        setTimeout(initPeerFallback, 1500);
+      }
+    } else if (e.type === 'peer-unavailable') {
+      setStatus('joinStatus', '✕ Game ID not found — check and retry', 'err');
+      toast('Game ID not found', 'err');
+      const btn = document.getElementById('joinBtn');
+      btn.disabled = false; btn.textContent = 'Connect →';
+    } else {
+      toast('Error: ' + e.type, 'err');
+    }
   });
 
   peer.on('disconnected', () => {
-    connLog('hostDebug', 'Peer disconnected — reconnecting…');
-    peer.reconnect();
+    connLog('hostDebug', 'Disconnected from broker — reconnecting…');
+    if (!peer.destroyed) setTimeout(() => { try { peer.reconnect(); } catch(e){} }, 1000);
+  });
+}
+
+// Fallback: use a different public PeerJS-compatible broker
+function initPeerFallback() {
+  document.getElementById('conn-loading').style.display = 'block';
+  document.getElementById('lobby-inner').style.display = 'none';
+
+  if (peer && !peer.destroyed) { try { peer.destroy(); } catch(e) {} }
+
+  // Fallback to peerjs.com on port 9000 (non-SSL path, still works on HTTPS pages via WSS)
+  peer = new Peer(undefined, {
+    host: '0.peerjs.com',
+    port: 443,
+    path: '/myapp',
+    secure: true,
+    debug: 1,
+    config: { iceServers: ICE_SERVERS }
+  });
+
+  const fallbackTimeout = setTimeout(() => {
+    if (!myId) {
+      connLog('hostDebug', 'Fallback also timed out');
+      document.getElementById('conn-loading').innerHTML =
+        '<p style="color:var(--red2);font-size:0.75rem;letter-spacing:2px;text-align:center;">BROKER UNREACHABLE<br><br><button onclick="peerInitRetries=0;initPeer()" style="background:var(--red);border:none;color:#fff;padding:8px 18px;font-family:Bebas Neue,cursive;letter-spacing:2px;cursor:pointer;">RETRY</button></p>';
+    }
+  }, 8000);
+
+  peer.on('open', id => {
+    clearTimeout(fallbackTimeout);
+    myId = id;
+    document.getElementById('myIdText').textContent = id;
+    document.getElementById('conn-loading').style.display = 'none';
+    document.getElementById('lobby-inner').style.display = 'flex';
+    setStatus('hostStatus', '● Ready — share your ID', 'ok');
+    connLog('hostDebug', '[fallback] Peer open: ' + id.slice(0,8) + '…');
+    toast('Connected via fallback server', 'warn');
+  });
+
+  peer.on('connection', c => {
+    if (conn && conn.open) { c.close(); return; }
+    conn = c; isHost = true; setupConn();
+    setStatus('hostStatus', '● Opponent connected — starting…', 'ok');
+    toast('Opponent connected!', 'ok');
+    setTimeout(startGame, 800);
+  });
+
+  peer.on('error', e => {
+    clearTimeout(fallbackTimeout);
+    connLog('hostDebug', '[fallback] ERROR: ' + e.type);
+    if (e.type === 'peer-unavailable') {
+      setStatus('joinStatus', '✕ Game ID not found — check and retry', 'err');
+      toast('Game ID not found', 'err');
+      const btn = document.getElementById('joinBtn');
+      btn.disabled = false; btn.textContent = 'Connect →';
+    }
+  });
+
+  peer.on('disconnected', () => {
+    if (!peer.destroyed) setTimeout(() => { try { peer.reconnect(); } catch(e){} }, 1000);
   });
 }
 
@@ -561,53 +686,58 @@ function initPeer() {
 function joinGame() {
   const id = document.getElementById('joinIdInput').value.trim();
   if (!id) { toast('Paste a Game ID first', 'err'); return; }
-  if (id === myId)  { toast("That's your own ID!", 'err'); return; }
+  if (id === myId) { toast("That's your own ID!", 'err'); return; }
 
   const btn = document.getElementById('joinBtn');
   btn.disabled = true;
   btn.textContent = 'Connecting…';
   setStatus('joinStatus', '◌ Connecting…', 'warn');
-  connLog('joinDebug', 'Connecting to: ' + id.slice(0,8) + '…');
+  connLog('joinDebug', 'Connecting to: ' + id.slice(0, 8) + '…');
 
-  // Clear any previous connection attempt
   if (conn) { try { conn.close(); } catch(e) {} conn = null; }
   clearTimeout(joinAttemptTimeout);
 
   isHost = false;
-  conn = peer.connect(id, { reliable: true });
+
+  // Pass full ICE config so joiner also benefits from TURN relay
+  conn = peer.connect(id, {
+    reliable: true,
+    config: { iceServers: ICE_SERVERS }
+  });
 
   conn.on('open', () => {
     clearTimeout(joinAttemptTimeout);
-    connLog('joinDebug', 'Channel open — handshake sent');
+    connLog('joinDebug', 'Channel open — sending handshake');
     setStatus('joinStatus', '● Connected — waiting for host to start…', 'ok');
     toast('Connected! Waiting for host…', 'ok');
     btn.textContent = 'Connected ✓';
-    // Send handshake so host knows we're ready
     send({ type: 'HANDSHAKE' });
   });
 
   conn.on('error', e => {
     clearTimeout(joinAttemptTimeout);
-    connLog('joinDebug', 'Connection error: ' + (e.message || e.type));
+    connLog('joinDebug', 'Conn error: ' + (e.message || e.type));
     setStatus('joinStatus', '✕ Failed — check the ID and retry', 'err');
-    toast('Connection failed', 'err');
+    toast('Connection failed: ' + (e.type || 'unknown'), 'err');
     btn.disabled = false;
     btn.textContent = 'Connect →';
+    conn = null;
   });
 
   setupConn();
 
-  // Timeout guard (12 s)
+  // 20 s timeout — TURN relay negotiation needs more time than LAN
   joinAttemptTimeout = setTimeout(() => {
     if (!conn || !conn.open) {
-      connLog('joinDebug', 'Connection timed out');
-      setStatus('joinStatus', '✕ Timed out — check the ID and retry', 'err');
+      connLog('joinDebug', 'Timed out');
+      setStatus('joinStatus', '✕ Timed out — make sure host page is still open', 'err');
       toast('Connection timed out', 'err');
       btn.disabled = false;
       btn.textContent = 'Connect →';
       try { conn.close(); } catch(e) {}
+      conn = null;
     }
-  }, 12000);
+  }, 20000);
 }
 
 // ── SHARED CONN SETUP ────────────────────────────────────────────────────────
