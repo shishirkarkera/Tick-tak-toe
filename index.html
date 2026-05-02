@@ -178,11 +178,20 @@
   .notice-bar { background:var(--panel);border-left:2px solid var(--blue);padding:12px 18px;font-size:0.76rem;color:var(--muted2);line-height:1.6; }
   .notice-bar strong { color:var(--white); }
 
-  /* CONNECTING */
+  /* CONNECTING SPINNER (init only) */
   .connecting { text-align:center;padding:50px 20px; }
   .connecting .spinner { width:34px;height:34px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px; }
   .connecting p { font-size:0.7rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase; }
   @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* CONN DEBUG LOG */
+  .conn-debug {
+    background:var(--bg2);border:1px solid var(--border);
+    padding:8px 12px;font-family:'DM Mono',monospace;
+    font-size:0.65rem;color:var(--muted);line-height:1.7;
+    max-height:80px;overflow-y:auto;margin-top:10px;
+    display:none;
+  }
 
   /* GAME */
   .game-layout { display:grid;grid-template-columns:1fr 240px;gap:14px;align-items:start; }
@@ -315,6 +324,15 @@
   .result-modal h2 { font-family:'Bebas Neue',cursive;font-size:3.2rem;letter-spacing:4px;color:var(--white);line-height:1;margin-bottom:6px; }
   .result-modal p  { font-size:0.8rem;color:var(--muted2);margin-bottom:26px;line-height:1.6; }
   .result-btns { display:flex;gap:10px;justify-content:center; }
+
+  /* TOAST */
+  .toast-container { position:fixed;top:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:300;pointer-events:none; }
+  .toast { background:var(--panel);border:1px solid var(--border2);padding:10px 14px;font-family:'DM Mono',monospace;font-size:0.72rem;color:var(--white);min-width:200px;animation:toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards; }
+  .toast.ok  { border-color:var(--green);color:var(--green); }
+  .toast.err { border-color:var(--red2);color:var(--red2); }
+  .toast.warn { border-color:var(--gold);color:var(--gold); }
+  @keyframes toastIn  { from{opacity:0;transform:translateX(12px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes toastOut { from{opacity:1} to{opacity:0} }
 </style>
 </head>
 <body>
@@ -323,6 +341,7 @@
 <div class="atmo atmo-2"></div>
 <div class="atmo atmo-3"></div>
 <div class="scanlines"></div>
+<div class="toast-container" id="toastContainer"></div>
 
 <div class="site-wrap">
 
@@ -357,31 +376,35 @@
       <div class="sec-label">Connection</div>
 
       <div class="lobby-grid">
+        <!-- HOST CARD -->
         <div class="card">
           <h2>Host Game</h2>
           <p>Share your Game ID with a friend to start a match.</p>
           <div class="peer-id-box">
             <span class="id-val" id="myIdText">—</span>
-            <button class="copy-btn" onclick="copyId()">Copy</button>
+            <button class="copy-btn" id="copyBtn" onclick="copyId()">Copy</button>
           </div>
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
             <span style="font-size:0.68rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;">Skittles</span>
             <input type="number" id="hostSkittles" value="15" min="5" max="50">
             <span style="font-size:0.68rem;color:var(--muted);">each</span>
           </div>
-          <div class="status" id="hostStatus">Awaiting connection…</div>
+          <div class="status ok" id="hostStatus">● Ready — share your ID</div>
+          <div class="conn-debug" id="hostDebug"></div>
         </div>
 
+        <!-- JOIN CARD -->
         <div class="card red-top">
           <h2>Join Game</h2>
           <p>Enter your opponent's Game ID to connect and play.</p>
           <div class="input-row">
-            <input type="text" id="joinIdInput" placeholder="Paste Game ID…">
+            <input type="text" id="joinIdInput" placeholder="Paste Game ID here…" autocomplete="off" spellcheck="false">
           </div>
           <div style="margin-bottom:12px;">
-            <button class="btn btn-red" onclick="joinGame()">Connect →</button>
+            <button class="btn btn-red" id="joinBtn" onclick="joinGame()">Connect →</button>
           </div>
           <div class="status" id="joinStatus">Ready to connect.</div>
+          <div class="conn-debug" id="joinDebug"></div>
         </div>
       </div>
 
@@ -464,89 +487,238 @@
 <script>
 const PALETTE = ['#d62b2b','#1e6fff','#c9a84c','#1db87a','#e05500','#9b2dca'];
 let peer, conn, isHost = false, myId = null, gameState = null;
+let joinAttemptTimeout = null;
 
+// ── TOAST ───────────────────────────────────────────────────────────────────
+function toast(msg, type='') {
+  const c = document.getElementById('toastContainer');
+  const d = document.createElement('div');
+  d.className = 'toast ' + type;
+  d.textContent = msg;
+  c.appendChild(d);
+  setTimeout(() => d.remove(), 3200);
+}
+
+// ── DEBUG LOG ────────────────────────────────────────────────────────────────
+function connLog(panelId, msg) {
+  const el = document.getElementById(panelId);
+  if (!el) return;
+  el.style.display = 'block';
+  const t = new Date().toLocaleTimeString('en-GB', { hour12:false });
+  el.innerHTML += `<div>[${t}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── PEER INIT ────────────────────────────────────────────────────────────────
 function initPeer() {
   document.getElementById('conn-loading').style.display = 'block';
   document.getElementById('lobby-inner').style.display = 'none';
-  peer = new Peer(undefined, { debug: 0 });
+
+  peer = new Peer(undefined, {
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    }
+  });
+
   peer.on('open', id => {
     myId = id;
     document.getElementById('myIdText').textContent = id;
     document.getElementById('conn-loading').style.display = 'none';
     document.getElementById('lobby-inner').style.display = 'flex';
-    setStatus('hostStatus','● Ready — share your ID','ok');
+    setStatus('hostStatus', '● Ready — share your ID', 'ok');
+    connLog('hostDebug', 'Peer open: ' + id.slice(0,8) + '…');
+    toast('Your Game ID is ready', 'ok');
   });
+
+  // Incoming connection (host side)
   peer.on('connection', c => {
-    conn = c; isHost = true; setupConn();
-    setStatus('hostStatus','● Opponent connected — starting…','ok');
-    setTimeout(startGame, 500);
+    if (conn && conn.open) { c.close(); return; } // already have a connection
+    conn = c;
+    isHost = true;
+    setupConn();
+    setStatus('hostStatus', '● Opponent connected — starting…', 'ok');
+    connLog('hostDebug', 'Incoming connection from peer');
+    toast('Opponent connected!', 'ok');
+    setTimeout(startGame, 600);
   });
-  peer.on('error', e => setStatus('joinStatus','✕ ' + e.message,'err'));
+
+  peer.on('error', e => {
+    connLog('hostDebug', 'ERROR: ' + e.type);
+    toast('Network error: ' + e.type, 'err');
+  });
+
+  peer.on('disconnected', () => {
+    connLog('hostDebug', 'Peer disconnected — reconnecting…');
+    peer.reconnect();
+  });
 }
 
+// ── JOIN ─────────────────────────────────────────────────────────────────────
 function joinGame() {
   const id = document.getElementById('joinIdInput').value.trim();
-  if (!id) return;
-  setStatus('joinStatus','◌ Connecting…','warn');
-  conn = peer.connect(id);
-  conn.on('open', () => { setupConn(); setStatus('joinStatus','● Connected — waiting for host','ok'); });
-  conn.on('error', e => setStatus('joinStatus','✕ ' + e.message,'err'));
+  if (!id) { toast('Paste a Game ID first', 'err'); return; }
+  if (id === myId)  { toast("That's your own ID!", 'err'); return; }
+
+  const btn = document.getElementById('joinBtn');
+  btn.disabled = true;
+  btn.textContent = 'Connecting…';
+  setStatus('joinStatus', '◌ Connecting…', 'warn');
+  connLog('joinDebug', 'Connecting to: ' + id.slice(0,8) + '…');
+
+  // Clear any previous connection attempt
+  if (conn) { try { conn.close(); } catch(e) {} conn = null; }
+  clearTimeout(joinAttemptTimeout);
+
+  isHost = false;
+  conn = peer.connect(id, { reliable: true });
+
+  conn.on('open', () => {
+    clearTimeout(joinAttemptTimeout);
+    connLog('joinDebug', 'Channel open — handshake sent');
+    setStatus('joinStatus', '● Connected — waiting for host to start…', 'ok');
+    toast('Connected! Waiting for host…', 'ok');
+    btn.textContent = 'Connected ✓';
+    // Send handshake so host knows we're ready
+    send({ type: 'HANDSHAKE' });
+  });
+
+  conn.on('error', e => {
+    clearTimeout(joinAttemptTimeout);
+    connLog('joinDebug', 'Connection error: ' + (e.message || e.type));
+    setStatus('joinStatus', '✕ Failed — check the ID and retry', 'err');
+    toast('Connection failed', 'err');
+    btn.disabled = false;
+    btn.textContent = 'Connect →';
+  });
+
+  setupConn();
+
+  // Timeout guard (12 s)
+  joinAttemptTimeout = setTimeout(() => {
+    if (!conn || !conn.open) {
+      connLog('joinDebug', 'Connection timed out');
+      setStatus('joinStatus', '✕ Timed out — check the ID and retry', 'err');
+      toast('Connection timed out', 'err');
+      btn.disabled = false;
+      btn.textContent = 'Connect →';
+      try { conn.close(); } catch(e) {}
+    }
+  }, 12000);
 }
 
+// ── SHARED CONN SETUP ────────────────────────────────────────────────────────
 function setupConn() {
   conn.on('data', handleMessage);
   conn.on('close', () => {
-    if (gameState && gameState.phase !== 'done')
-      showResult('📡','Disconnected','Your opponent left the game.');
+    connLog('hostDebug', 'Connection closed');
+    if (gameState && gameState.phase !== 'done') {
+      showResult('📡', 'Disconnected', 'Your opponent left the game.');
+    }
   });
 }
 
-function send(msg) { if (conn && conn.open) conn.send(msg); }
+function send(msg) {
+  if (conn && conn.open) {
+    try { conn.send(msg); } catch(e) { console.warn('send failed:', e); }
+  }
+}
 
 function copyId() {
+  if (!myId) return;
   navigator.clipboard.writeText(myId).then(() => {
-    const b = document.querySelector('.copy-btn');
+    const b = document.getElementById('copyBtn');
     b.textContent = 'Copied!';
-    setTimeout(() => b.textContent = 'Copy', 1600);
+    setTimeout(() => b.textContent = 'Copy', 1800);
+    toast('Game ID copied!', 'ok');
+  }).catch(() => {
+    // Fallback for environments without clipboard API
+    const inp = document.getElementById('myIdText');
+    const range = document.createRange();
+    range.selectNode(inp);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    document.execCommand('copy');
+    toast('Game ID copied!', 'ok');
   });
 }
 
 function setStatus(id, msg, cls='') {
   const el = document.getElementById(id);
-  el.textContent = msg; el.className = 'status ' + cls;
+  el.textContent = msg;
+  el.className = 'status ' + cls;
 }
 
+// ── GAME INIT ─────────────────────────────────────────────────────────────────
 function startGame() {
   if (isHost) {
     const sk = parseInt(document.getElementById('hostSkittles').value) || 15;
-    gameState = makeState('X','O',sk);
-    send({ type:'START', startSkittles: sk });
+    gameState = makeState('X', 'O', sk);
+    send({ type: 'START', startSkittles: sk });
     initGameUI();
   }
 }
 
 function makeState(myM, oppM, sk) {
-  return { board:Array(9).fill(null), mySkittles:sk, oppSkittles:sk, myMarker:myM, oppMarker:oppM,
-    phase:'select', selectedSquare:null, myBid:null, oppBid:null, currentRound:1, winCells:[], startSkittles:sk };
+  return {
+    board: Array(9).fill(null),
+    mySkittles: sk, oppSkittles: sk,
+    myMarker: myM, oppMarker: oppM,
+    phase: 'select', selectedSquare: null,
+    myBid: null, oppBid: null,
+    currentRound: 1, winCells: [], startSkittles: sk
+  };
 }
 
+// ── MESSAGE HANDLER ───────────────────────────────────────────────────────────
 function handleMessage(msg) {
-  if (msg.type === 'START') { gameState = makeState('O','X',msg.startSkittles); initGameUI(); return; }
+  // Joiner sends this on channel open; host ignores (already handled by peer.on('connection'))
+  if (msg.type === 'HANDSHAKE') {
+    connLog('hostDebug', 'Handshake received from joiner');
+    return;
+  }
+
+  if (msg.type === 'START') {
+    gameState = makeState('O', 'X', msg.startSkittles);
+    initGameUI();
+    return;
+  }
+
   if (msg.type === 'SELECT') {
     gameState.selectedSquare = msg.square;
-    if (msg.square === null) { gameState.phase='select'; gameState.myBid=null; gameState.oppBid=null; renderBoard(); setPhase('select'); return; }
-    gameState.phase='bid'; gameState.myBid=null; gameState.oppBid=null;
+    if (msg.square === null) {
+      gameState.phase = 'select';
+      gameState.myBid = null; gameState.oppBid = null;
+      renderBoard(); setPhase('select');
+      return;
+    }
+    gameState.phase = 'bid';
+    gameState.myBid = null; gameState.oppBid = null;
     renderBoard(); showBidArea(msg.square); setPhase('bid');
-    log(`Opponent chose square <span class="lh">${msg.square+1}</span> — place your bid.`); return;
+    log(`Opponent chose square <span class="lh">${msg.square + 1}</span> — place your bid.`);
+    return;
   }
-  if (msg.type === 'BID') { gameState.oppBid=msg.bid; log('Opponent placed their bid.'); checkReveal(); return; }
+
+  if (msg.type === 'BID') {
+    gameState.oppBid = msg.bid;
+    log('Opponent placed their bid.');
+    checkReveal();
+    return;
+  }
+
   if (msg.type === 'REMATCH') {
-    const sk=gameState.startSkittles;
+    const sk = gameState.startSkittles;
     gameState = makeState(gameState.oppMarker, gameState.myMarker, sk);
-    closeResult(); initGameUI(); log('<span class="lw">Rematch started.</span>'); return;
+    closeResult(); initGameUI();
+    log('<span class="lw">Rematch started.</span>');
+    return;
   }
 }
 
+// ── GAME UI ───────────────────────────────────────────────────────────────────
 function initGameUI() {
   document.getElementById('screen-lobby').classList.remove('active');
   document.getElementById('screen-game').classList.add('active');
@@ -561,20 +733,23 @@ function initGameUI() {
 }
 
 function renderBoard() {
-  const el = document.getElementById('board'); el.innerHTML = '';
-  gameState.board.forEach((cell,i) => {
-    const d = document.createElement('div'); d.className='cell';
+  const el = document.getElementById('board');
+  el.innerHTML = '';
+  gameState.board.forEach((cell, i) => {
+    const d = document.createElement('div');
+    d.className = 'cell';
     if (cell && cell.voided) {
-      d.classList.add('voided'); d.innerHTML=`<span class="cell-void-txt">VOID</span>`;
+      d.classList.add('voided');
+      d.innerHTML = `<span class="cell-void-txt">VOID</span>`;
     } else if (cell && cell.owner) {
-      d.classList.add('taken', cell.owner==='X'?'taken-x':'taken-o');
+      d.classList.add('taken', cell.owner === 'X' ? 'taken-x' : 'taken-o');
       if (gameState.winCells.includes(i)) d.classList.add('win-cell');
-      d.innerHTML=`<span class="cell-marker ${cell.owner.toLowerCase()}">${cell.owner}</span>`;
+      d.innerHTML = `<span class="cell-marker ${cell.owner.toLowerCase()}">${cell.owner}</span>`;
     } else {
-      if (gameState.phase==='select') d.addEventListener('click',()=>selectSquare(i));
+      if (gameState.phase === 'select') d.addEventListener('click', () => selectSquare(i));
       else d.classList.add('disabled');
-      if (gameState.selectedSquare===i) d.classList.add('selected');
-      d.innerHTML=`<span class="cell-num">${String(i+1).padStart(2,'0')}</span>`;
+      if (gameState.selectedSquare === i) d.classList.add('selected');
+      d.innerHTML = `<span class="cell-num">${String(i + 1).padStart(2, '0')}</span>`;
     }
     el.appendChild(d);
   });
@@ -587,101 +762,123 @@ function renderSkittles() {
   renderDots('oppSkittleRow', gameState.oppSkittles, gameState.startSkittles);
   const s = document.getElementById('bidSlider');
   s.max = gameState.mySkittles;
-  if (parseInt(s.value)>gameState.mySkittles) s.value=gameState.mySkittles;
+  if (parseInt(s.value) > gameState.mySkittles) s.value = gameState.mySkittles;
   document.getElementById('sliderMax').textContent = gameState.mySkittles;
   updateBidDisplay();
 }
 
-function renderDots(id,rem,total) {
-  const el=document.getElementById(id); el.innerHTML='';
-  for (let i=0;i<total;i++) {
-    const s=document.createElement('span');
-    s.className='sdot'+(i>=rem?' spent':'');
-    s.style.background=PALETTE[i%PALETTE.length];
+function renderDots(id, rem, total) {
+  const el = document.getElementById(id);
+  el.innerHTML = '';
+  for (let i = 0; i < total; i++) {
+    const s = document.createElement('span');
+    s.className = 'sdot' + (i >= rem ? ' spent' : '');
+    s.style.background = PALETTE[i % PALETTE.length];
     el.appendChild(s);
   }
 }
 
 function setPhase(ph) {
-  if (gameState) gameState.phase=ph;
-  const b=document.getElementById('phaseBadge');
-  const map={select:['SELECT SQUARE','phase-select'],bid:['PLACE BID','phase-bid'],waiting_reveal:['LOCKED IN…','phase-bid'],reveal:['REVEALING','phase-reveal'],done:['GAME OVER','phase-done']};
-  const [label,cls]=map[ph]||['—',''];
-  b.textContent=label; b.className='phase-badge '+cls;
-  const ti=document.getElementById('turnIndicator');
-  if (ph==='select')          { ti.textContent='▶ SELECT A SQUARE'; ti.className='turn-bar mine'; }
-  else if (ph==='bid')        { ti.textContent='▶ PLACE YOUR BID'; ti.className='turn-bar mine'; }
-  else if (ph==='waiting_reveal') { ti.textContent='◆ AWAITING OPPONENT…'; ti.className='turn-bar theirs'; }
-  else if (ph==='reveal')     { ti.textContent='◆ REVEALING…'; ti.className='turn-bar theirs'; }
-  else if (ph==='done')       { ti.textContent='■ GAME OVER'; ti.className='turn-bar theirs'; }
+  if (gameState) gameState.phase = ph;
+  const b = document.getElementById('phaseBadge');
+  const map = {
+    select:          ['SELECT SQUARE', 'phase-select'],
+    bid:             ['PLACE BID',     'phase-bid'],
+    waiting_reveal:  ['LOCKED IN…',    'phase-bid'],
+    reveal:          ['REVEALING',     'phase-reveal'],
+    done:            ['GAME OVER',     'phase-done']
+  };
+  const [label, cls] = map[ph] || ['—', ''];
+  b.textContent = label;
+  b.className = 'phase-badge ' + cls;
+  const ti = document.getElementById('turnIndicator');
+  if (ph === 'select')         { ti.textContent = '▶ SELECT A SQUARE';   ti.className = 'turn-bar mine'; }
+  else if (ph === 'bid')       { ti.textContent = '▶ PLACE YOUR BID';    ti.className = 'turn-bar mine'; }
+  else if (ph === 'waiting_reveal') { ti.textContent = '◆ AWAITING OPPONENT…'; ti.className = 'turn-bar theirs'; }
+  else if (ph === 'reveal')    { ti.textContent = '◆ REVEALING…';        ti.className = 'turn-bar theirs'; }
+  else if (ph === 'done')      { ti.textContent = '■ GAME OVER';         ti.className = 'turn-bar theirs'; }
 }
 
 function selectSquare(i) {
-  if (!gameState||gameState.phase!=='select') return;
+  if (!gameState || gameState.phase !== 'select') return;
   if (gameState.board[i]) return;
-  gameState.selectedSquare=i; gameState.myBid=null; gameState.oppBid=null;
-  send({ type:'SELECT', square:i });
+  gameState.selectedSquare = i;
+  gameState.myBid = null; gameState.oppBid = null;
+  send({ type: 'SELECT', square: i });
   renderBoard(); showBidArea(i); setPhase('bid');
-  log(`You selected square <span class="lh">${i+1}</span>.`);
+  log(`You selected square <span class="lh">${i + 1}</span>.`);
 }
 
 function showBidArea(sq) {
-  document.getElementById('bidArea').style.display='block';
-  document.getElementById('waitingBidMsg').style.display='none';
-  document.getElementById('bidSquareLabel').textContent=`#${sq+1}`;
-  const s=document.getElementById('bidSlider');
-  s.max=gameState.mySkittles; s.value=Math.min(1,gameState.mySkittles);
+  document.getElementById('bidArea').style.display = 'block';
+  document.getElementById('waitingBidMsg').style.display = 'none';
+  document.getElementById('bidSquareLabel').textContent = `#${sq + 1}`;
+  const s = document.getElementById('bidSlider');
+  s.max = gameState.mySkittles;
+  s.value = Math.min(1, gameState.mySkittles);
   updateBidDisplay();
 }
 
 function cancelBid() {
-  if (gameState.myBid!==null) return;
-  gameState.selectedSquare=null;
-  send({ type:'SELECT', square:null });
-  document.getElementById('bidArea').style.display='none';
+  if (gameState.myBid !== null) return;
+  gameState.selectedSquare = null;
+  send({ type: 'SELECT', square: null });
+  document.getElementById('bidArea').style.display = 'none';
   renderBoard(); setPhase('select');
 }
 
 function updateBidDisplay() {
-  document.getElementById('bidValueDisplay').textContent=document.getElementById('bidSlider').value;
+  document.getElementById('bidValueDisplay').textContent = document.getElementById('bidSlider').value;
 }
 
 function confirmBid() {
-  const bid=parseInt(document.getElementById('bidSlider').value);
-  if (bid<0||bid>gameState.mySkittles) return;
-  gameState.myBid=bid; send({ type:'BID', bid });
-  document.getElementById('bidArea').style.display='none';
-  document.getElementById('waitingBidMsg').style.display='block';
+  const bid = parseInt(document.getElementById('bidSlider').value);
+  if (bid < 0 || bid > gameState.mySkittles) return;
+  gameState.myBid = bid;
+  send({ type: 'BID', bid });
+  document.getElementById('bidArea').style.display = 'none';
+  document.getElementById('waitingBidMsg').style.display = 'block';
   setPhase('waiting_reveal');
-  log(`You bid <span class="lh">${bid}</span> Skittle${bid!==1?'s':''}.`);
+  log(`You bid <span class="lh">${bid}</span> Skittle${bid !== 1 ? 's' : ''}.`);
   checkReveal();
 }
 
-function checkReveal() { if (gameState.myBid!==null&&gameState.oppBid!==null) doReveal(); }
+function checkReveal() {
+  if (gameState.myBid !== null && gameState.oppBid !== null) doReveal();
+}
 
 function doReveal() {
-  document.getElementById('waitingBidMsg').style.display='none';
+  document.getElementById('waitingBidMsg').style.display = 'none';
   setPhase('reveal');
-  const sq=gameState.selectedSquare, myBid=gameState.myBid, oppBid=gameState.oppBid;
-  let outcome, rc=['',''];
-  if (myBid>oppBid) {
-    outcome='win'; rc=['winner','loser'];
-    gameState.mySkittles-=myBid; gameState.board[sq]={owner:gameState.myMarker};
-    log(`Square ${sq+1} → You <span class="lw">WIN</span> (${myBid} vs ${oppBid})`);
-  } else if (oppBid>myBid) {
-    outcome='lose'; rc=['loser','winner'];
-    gameState.oppSkittles-=oppBid; gameState.board[sq]={owner:gameState.oppMarker};
-    log(`Square ${sq+1} → You <span class="ll">LOSE</span> (${myBid} vs ${oppBid})`);
+  const sq = gameState.selectedSquare;
+  const myBid = gameState.myBid;
+  const oppBid = gameState.oppBid;
+  let outcome, rc = ['', ''];
+
+  if (myBid > oppBid) {
+    outcome = 'win'; rc = ['winner', 'loser'];
+    gameState.mySkittles -= myBid;
+    gameState.board[sq] = { owner: gameState.myMarker };
+    log(`Square ${sq + 1} → You <span class="lw">WIN</span> (${myBid} vs ${oppBid})`);
+  } else if (oppBid > myBid) {
+    outcome = 'lose'; rc = ['loser', 'winner'];
+    gameState.oppSkittles -= oppBid;
+    gameState.board[sq] = { owner: gameState.oppMarker };
+    log(`Square ${sq + 1} → You <span class="ll">LOSE</span> (${myBid} vs ${oppBid})`);
   } else {
-    outcome='tie'; rc=['tied','tied'];
-    gameState.board[sq]={voided:true};
-    log(`Square ${sq+1} → <span class="lv">VOID</span> — both bid ${myBid}`);
+    outcome = 'tie'; rc = ['tied', 'tied'];
+    gameState.board[sq] = { voided: true };
+    log(`Square ${sq + 1} → <span class="lv">VOID</span> — both bid ${myBid}`);
   }
-  const outcomeText = outcome==='win'?'▲ You claimed the square.' : outcome==='lose'?'▼ Opponent claimed the square.' : '■ Square voided.';
-  const ra=document.getElementById('revealArea');
-  ra.style.display='block';
-  ra.innerHTML=`<div class="reveal-block">
-    <div class="reveal-label">Reveal — Square #${sq+1}</div>
+
+  const outcomeText = outcome === 'win'  ? '▲ You claimed the square.'
+                    : outcome === 'lose' ? '▼ Opponent claimed the square.'
+                    :                     '■ Square voided.';
+
+  const ra = document.getElementById('revealArea');
+  ra.style.display = 'block';
+  ra.innerHTML = `<div class="reveal-block">
+    <div class="reveal-label">Reveal — Square #${sq + 1}</div>
     <div class="reveal-row">
       <div class="reveal-box ${rc[0]}"><div class="r-label">You</div><div class="r-amount">${myBid}</div></div>
       <div class="reveal-vs">VS</div>
@@ -689,49 +886,61 @@ function doReveal() {
     </div>
     <div class="reveal-outcome">${outcomeText}</div>
   </div>`;
-  document.getElementById('roundCounter').textContent=`RND ${String(gameState.currentRound).padStart(2,'0')}`;
-  gameState.currentRound++; renderSkittles();
+
+  document.getElementById('roundCounter').textContent = `RND ${String(gameState.currentRound).padStart(2, '0')}`;
+  gameState.currentRound++;
+  renderSkittles();
+
   setTimeout(() => {
-    const result=checkWin();
+    const result = checkWin();
     if (result) {
-      gameState.phase='done'; gameState.winCells=result.cells||[]; renderBoard();
-      if (result.winner===gameState.myMarker) showResult('🏆','You Win','You outbid your opponent with precision.');
-      else if (result.winner==='draw') showResult('🤝','Draw','The board is full — no line completed.');
-      else showResult('💀','You Lose','Opponent took control of the board.');
+      gameState.phase = 'done';
+      gameState.winCells = result.cells || [];
+      renderBoard();
+      if (result.winner === gameState.myMarker)
+        showResult('🏆', 'You Win', 'You outbid your opponent with precision.');
+      else if (result.winner === 'draw')
+        showResult('🤝', 'Draw', 'The board is full — no line completed.');
+      else
+        showResult('💀', 'You Lose', 'Opponent took control of the board.');
       return;
     }
     setTimeout(() => {
-      ra.style.display='none';
-      gameState.selectedSquare=null; gameState.myBid=null; gameState.oppBid=null;
+      ra.style.display = 'none';
+      gameState.selectedSquare = null;
+      gameState.myBid = null; gameState.oppBid = null;
       setPhase('select'); renderBoard();
     }, 1800);
   }, 600);
 }
 
 function checkWin() {
-  const lines=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-  const b=gameState.board;
-  for (const [a,c,d] of lines) {
-    if (b[a]?.owner&&b[a].owner===b[c]?.owner&&b[a].owner===b[d]?.owner)
-      return { winner:b[a].owner, cells:[a,c,d] };
+  const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const b = gameState.board;
+  for (const [a, c, d] of lines) {
+    if (b[a]?.owner && b[a].owner === b[c]?.owner && b[a].owner === b[d]?.owner)
+      return { winner: b[a].owner, cells: [a, c, d] };
   }
-  if (b.every(cell=>cell!==null)) return { winner:'draw', cells:[] };
+  if (b.every(cell => cell !== null)) return { winner: 'draw', cells: [] };
   return null;
 }
 
-function showResult(emoji,title,desc) {
-  document.getElementById('resultEmoji').textContent=emoji;
-  document.getElementById('resultTitle').textContent=title;
-  document.getElementById('resultDesc').textContent=desc;
+function showResult(emoji, title, desc) {
+  document.getElementById('resultEmoji').textContent = emoji;
+  document.getElementById('resultTitle').textContent = title;
+  document.getElementById('resultDesc').textContent = desc;
   document.getElementById('resultOverlay').classList.remove('hidden');
   setPhase('done');
 }
-function closeResult() { document.getElementById('resultOverlay').classList.add('hidden'); }
+
+function closeResult() {
+  document.getElementById('resultOverlay').classList.add('hidden');
+}
 
 function rematch() {
-  send({ type:'REMATCH' });
-  const sk=gameState.startSkittles;
-  gameState=makeState(gameState.oppMarker,gameState.myMarker,sk);
+  send({ type: 'REMATCH' });
+  const sk = gameState.startSkittles;
+  gameState = makeState(gameState.oppMarker, gameState.myMarker, sk);
   closeResult(); initGameUI();
 }
 
@@ -739,13 +948,19 @@ function backToLobby() {
   closeResult();
   document.getElementById('screen-game').classList.remove('active');
   document.getElementById('screen-lobby').classList.add('active');
-  gameState=null;
+  // Reset join card
+  document.getElementById('joinIdInput').value = '';
+  document.getElementById('joinBtn').disabled = false;
+  document.getElementById('joinBtn').textContent = 'Connect →';
+  setStatus('joinStatus', 'Ready to connect.', '');
+  gameState = null;
 }
 
 function log(msg) {
-  const el=document.getElementById('gameLog');
-  const e=document.createElement('div'); e.className='log-entry'; e.innerHTML=msg;
-  el.appendChild(e); el.scrollTop=el.scrollHeight;
+  const el = document.getElementById('gameLog');
+  const e = document.createElement('div');
+  e.className = 'log-entry'; e.innerHTML = msg;
+  el.appendChild(e); el.scrollTop = el.scrollHeight;
 }
 
 initPeer();
